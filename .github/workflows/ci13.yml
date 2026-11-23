@@ -1,0 +1,46 @@
+name: Build APK (ci13)
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: unzip -q project5.zip -d proj
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Ensure Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f | head -1); fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Gradle 8.11.1 from GitHub mirror
+        run: |
+          set -o pipefail
+          curl -sL --retry 5 --retry-delay 5 -o /tmp/gradle.zip https://github.com/gradle/gradle-distributions/releases/download/v8.11.1/gradle-8.11.1-bin.zip
+          ls -la /tmp/gradle.zip
+          sudo unzip -q /tmp/gradle.zip -d /opt
+          ls /opt/gradle-8.11.1/bin/
+          /opt/gradle-8.11.1/bin/gradle --version
+      - name: Build unsigned release APK
+        working-directory: proj
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! /opt/gradle-8.11.1/bin/gradle assembleRelease --console=plain > build.log 2>&1; then
+            WW=$(grep -A3 "What went wrong" build.log | tr '\n' ' ' | tr -d '"' | cut -c1-200)
+            gh issue create --title "FAIL13: $WW" --body "see title" || true
+            exit 1
+          fi
+          ls -la app/build/outputs/apk/release/
+      - name: Attach APK to release
+        working-directory: proj
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create build-${{ github.run_number }} app/build/outputs/apk/release/app-release-unsigned.apk --title "EzQ Bridge build ${{ github.run_number }}" --notes "Unsigned APK, signed locally after download"
