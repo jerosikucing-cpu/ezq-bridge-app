@@ -1,0 +1,49 @@
+name: Build APK (ci8)
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: unzip -q project5.zip -d proj
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Ensure Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f | head -1); fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Build unsigned release APK
+        working-directory: proj
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --console=plain > build.log 2>&1 || true
+          echo "---- tail build.log ----"
+          tail -30 build.log || true
+          ls -la app/build/outputs/apk/release/ || echo "NO APK OUTPUT DIR"
+          test -f app/build/outputs/apk/release/app-release-unsigned.apk
+      - name: Report failure with log
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          tail -60 proj/build.log > fail-tail.txt 2>/dev/null
+          echo "EzQ Bridge CI run ${{ github.run_id }} failed. Log tail:" > fail-body.txt
+          echo '```' >> fail-body.txt
+          cat fail-tail.txt >> fail-body.txt
+          echo '```' >> fail-body.txt
+          gh issue create --title "BUILDFAIL8" --body-file fail-body.txt
+          exit 0
+      - name: Attach APK to release
+        working-directory: proj
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create build-${{ github.run_number }} app/build/outputs/apk/release/app-release-unsigned.apk --title "EzQ Bridge build ${{ github.run_number }}" --notes "Unsigned APK, signed locally after download"
