@@ -1,0 +1,41 @@
+name: Build APK (ci10)
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: unzip -q project5.zip -d proj
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Ensure Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f | head -1); fi
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+      - name: Build unsigned release APK
+        working-directory: proj
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x gradlew
+          if ! ./gradlew assembleRelease --console=plain > build.log 2>&1; then
+            N=$(wc -l < build.log)
+            G1=$(grep -m1 "FAILURE\|Exception\|error:\|Caused by" build.log | tr -d '"' | cut -c1-80)
+            LAST=$(tail -2 build.log | head -1 | tr -d '"' | cut -c1-80)
+            gh issue create --title "FAIL10 lines=$N | $G1 | last: $LAST" --body "see title" || true
+            exit 1
+          fi
+          ls -la app/build/outputs/apk/release/
+      - name: Attach APK to release
+        working-directory: proj
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create build-${{ github.run_number }} app/build/outputs/apk/release/app-release-unsigned.apk --title "EzQ Bridge build ${{ github.run_number }}" --notes "Unsigned APK, signed locally after download"
