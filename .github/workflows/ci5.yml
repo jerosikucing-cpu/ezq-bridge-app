@@ -1,0 +1,46 @@
+name: Build APK (ci5)
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unzip project
+        run: unzip -q project2.zip -d proj
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Ensure Android SDK 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f | head -1); fi
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
+      - name: Build unsigned release APK
+        working-directory: proj
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --console=plain > build.log 2>&1 || true
+          echo "---- tail build.log ----"
+          tail -30 build.log || true
+          ls -la app/build/outputs/apk/release/ || echo "NO APK OUTPUT DIR"
+          test -f app/build/outputs/apk/release/app-release-unsigned.apk
+      - name: Report failure with log tail
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAIL=$(tail -25 proj/build.log 2>/dev/null | tr '\n' ' ' | cut -c1-130)
+          echo "tail: $TAIL"
+          gh issue create --title "BUILDFAIL5: $TAIL" --body "Run ${{ github.run_id }} failed. Full log attached in run logs." || true
+      - name: Attach APK to release
+        working-directory: proj
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create build-${{ github.run_number }} app/build/outputs/apk/release/app-release-unsigned.apk --title "EzQ Bridge build ${{ github.run_number }}" --notes "Unsigned APK, signed locally after download"
